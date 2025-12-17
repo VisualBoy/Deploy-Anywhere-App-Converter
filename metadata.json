@@ -1,0 +1,5 @@
+{
+  "name": "Deploy Anywhere - App Converter",
+  "description": "Convert CasaOS and BigBear apps into Proxmox LXC scripts, Dockge, or Portainer stacks.",
+  "requestFramePermissions": []
+}
