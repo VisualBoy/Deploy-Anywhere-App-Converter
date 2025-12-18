@@ -133,7 +133,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             </div>
                             <button 
                                 onClick={() => onRemoveRepo(repo.id)}
-                                className="p-2 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                className="p-2 text-slate-600 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors opacity-50 group-hover:opacity-100 focus:opacity-100"
                                 title="Remove Repository"
                             >
                                 <Trash2 className="w-4 h-4" />
