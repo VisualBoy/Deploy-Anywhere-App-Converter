@@ -8,7 +8,7 @@ interface SettingsPanelProps {
   repositories: Repo[];
   onAddRepo: (name: string, url: string) => void;
   onRemoveRepo: (id: string) => void;
-  onSync: () => void;
+  onSync: () => void | Promise<void>;
 }
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ 
@@ -31,13 +31,13 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
-  const handleSync = () => {
+  const handleSync = async () => {
     setIsSyncing(true);
-    // Simulate sync delay
-    setTimeout(() => {
-        onSync();
-        setIsSyncing(false);
-    }, 2000);
+    try {
+      await onSync();
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   return (
