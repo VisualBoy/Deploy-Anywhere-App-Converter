@@ -2,6 +2,8 @@
 
 **Deploy Anywhere App Converter** is an advanced Single Page Application (SPA) built with **React**, **TypeScript**, and **Tailwind CSS**. The project streamlines the deployment of containerized applications by transforming third-party repositories (CasaOS, BigBear, ZimoOS) or custom `docker-compose.yaml` files into automated installation scripts for various platforms, with a primary focus on **Proxmox VE (LXC)**.
 
+![cover image](app_conv_v3_cover.png)
+
 ## 🚀 Core Features
 
 * **Multi-Source Library**: Browse and search apps from CasaOS, BigBear, and ZimoOS repositories.
