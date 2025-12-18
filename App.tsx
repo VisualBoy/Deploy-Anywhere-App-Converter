@@ -5,6 +5,7 @@ import { YamlInput } from './components/YamlInput';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AppDefinition, DeploymentConfig, TargetPlatform, Repo } from './types';
 import { REPOSITORIES as DEFAULT_REPOS } from './services/mockData';
+import { fetchAppsFromUrl } from './services/repository';
 import { generateProxmoxScript, generateStackFile } from './services/scriptGenerator';
 import { 
     Settings, Download, HardDrive, Server, Cpu,
@@ -63,14 +64,26 @@ const App: React.FC = () => {
   }, [currentStep]);
 
   // Handle Repository Actions
-  const handleAddRepo = (name: string, url: string) => {
-      const newRepo: Repo = {
-          id: `custom-${Date.now()}`,
-          name: name,
-          url: url,
-          apps: [] // In a real app, we would fetch apps here
-      };
-      setRepositories(prev => [...prev, newRepo]);
+  const handleAddRepo = async (name: string, url: string) => {
+      try {
+          const fetchedApps = await fetchAppsFromUrl(url);
+
+          if (fetchedApps.length === 0) {
+              alert('No apps found in this repository. Ensure it follows CasaOS structure (Apps/ folder with docker-compose.yml files).');
+              return;
+          }
+
+          const newRepo: Repo = {
+              id: `custom-${Date.now()}`,
+              name: name,
+              url: url,
+              apps: fetchedApps
+          };
+          setRepositories(prev => [...prev, newRepo]);
+      } catch (error) {
+          console.error(error);
+          alert('Failed to fetch repository. Check URL and try again. (GitHub API rate limits may apply)');
+      }
   };
 
   const handleRemoveRepo = (id: string) => {
