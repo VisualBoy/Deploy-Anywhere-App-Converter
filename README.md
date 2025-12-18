@@ -23,8 +23,13 @@ The application fetches app definitions from the following verified sources:
 | Provider | Repository URL | Type |
 | :--- | :--- | :--- |
 | **CasaOS** | `https://api.github.com/repos/IceWhaleTech/CasaOS-AppStore/contents/Apps` | Official Store |
-| **BigBear** | `https://raw.githubusercontent.com/bigbeartechworld/big-bear-casaos/master/all-apps.json` | Community |
 | **ZimoOS** | `https://api.zimoos.com/v1/appstore/apps` | Hardware Specific |
+| **BigBear** | `https://github.com/bigbeartechworld/big-bear-casaos` | Community |
+| **Big Bear Runtipi** | `https://github.com/bigbeartechworld/big-bear-runtipi` | Community |
+| **BigBear Umbrel** | `https://github.com/bigbeartechworld/big-bear-umbrel` | Community |
+| **BigBearCosmos** | `https://github.com/bigbeartechworld/big-bear-cosmos` | Community |
+| **BigBearDockge** | `https://github.com/bigbeartechworld/big-bear-dockge` | Community |
+| **BigBearPortainer** | `https://github.com/bigbeartechworld/big-bear-portainer` | Community |
 
 
 
