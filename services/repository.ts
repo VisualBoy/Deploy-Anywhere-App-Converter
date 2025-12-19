@@ -1,25 +1,16 @@
 import { AppDefinition } from '../types';
-import { fetchRepoContents, getRawUrl, parseGitHubUrl } from './github';
-import { parseCasaOSApp } from './appParser';
+import { fetchRecursiveRepoTree, getRawUrl, parseGitHubUrl } from './github';
+import { parseUmbrelApp, parseCombinedMetadata } from './appParser';
 
-// Limit concurrent fetches to avoid overwhelming the browser/network
-const CONCURRENT_LIMIT = 5;
+const CONCURRENT_LIMIT = 8;
 
-/**
- * Fetches apps from a repository URL.
- * Handles:
- * - Direct JSON list (legacy)
- * - GitHub Repository scanning (CasaOS style)
- */
 export const fetchAppsFromUrl = async (url: string): Promise<AppDefinition[]> => {
-    // 1. Try to parse as GitHub URL
     const gitInfo = parseGitHubUrl(url);
 
     if (gitInfo) {
         return fetchGitHubApps(gitInfo.owner, gitInfo.repo, gitInfo.branch);
     }
 
-    // 2. Fallback: Fetch as direct JSON
     try {
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch JSON');
@@ -37,53 +28,78 @@ export const fetchAppsFromUrl = async (url: string): Promise<AppDefinition[]> =>
 
 const fetchGitHubApps = async (owner: string, repo: string, branch: string = 'master'): Promise<AppDefinition[]> => {
     try {
-        // Try 'Apps' directory first (CasaOS standard)
-        let appsPath = 'Apps';
-        let contents;
+        const tree = await fetchRecursiveRepoTree(owner, repo, branch);
+        
+        const folders: Record<string, { 
+            compose?: string; 
+            umbrel?: string; 
+            config?: string; 
+            icon?: string; 
+            id: string; 
+            folderPath: string 
+        }> = {};
 
-        try {
-            contents = await fetchRepoContents(owner, repo, appsPath);
-        } catch (e) {
-            // If Apps folder doesn't exist, try root (maybe Umbrel style, though we focus on CasaOS structure mostly)
-            console.warn('Apps directory not found, trying root...');
-            appsPath = '';
-            contents = await fetchRepoContents(owner, repo, '');
-        }
+        tree.forEach(item => {
+            const parts = item.path.split('/');
+            if (parts.length < 2) return;
+            
+            const folderPath = parts.slice(0, -1).join('/');
+            const fileName = parts[parts.length - 1].toLowerCase();
+            const id = parts[parts.length - 2];
 
-        // Filter for directories
-        const appDirs = contents.filter(item => item.type === 'dir');
+            if (!folders[folderPath]) {
+                folders[folderPath] = { id, folderPath };
+            }
 
-        if (appDirs.length === 0) {
-            console.warn('No app directories found');
-            return [];
-        }
+            if (fileName === 'docker-compose.yml' || fileName === 'docker-compose.yaml') {
+                folders[folderPath].compose = item.path;
+            } else if (fileName === 'umbrel-app.yml' || fileName === 'umbrel-app.yaml') {
+                folders[folderPath].umbrel = item.path;
+            } else if (fileName === 'config.json') {
+                folders[folderPath].config = item.path;
+            } else if (fileName === 'icon.svg' || fileName === 'icon.png' || fileName === 'icon.jpg' || fileName === 'logo.png') {
+                folders[folderPath].icon = item.path;
+            }
+        });
 
+        const validFolders = Object.values(folders).filter(f => f.compose);
         const apps: AppDefinition[] = [];
+        const folderList = validFolders.slice(0, 500);
 
-        // Process in chunks to avoid rate limits / network congestion
-        // Only process first 30 apps to avoid hitting rate limits in this demo context
-        // In a real production app, we would paginate or use a different strategy.
-        const dirsToProcess = appDirs.slice(0, 30);
+        for (let i = 0; i < folderList.length; i += CONCURRENT_LIMIT) {
+            const chunk = folderList.slice(i, i + CONCURRENT_LIMIT);
 
-        for (let i = 0; i < dirsToProcess.length; i += CONCURRENT_LIMIT) {
-            const chunk = dirsToProcess.slice(i, i + CONCURRENT_LIMIT);
-
-            const promises = chunk.map(async (dir) => {
+            const promises = chunk.map(async (folder) => {
                 try {
-                    // Try fetching docker-compose.yml
-                    // Path in repo: Apps/appName/docker-compose.yml
-                    const composePath = appsPath ? `${appsPath}/${dir.name}/docker-compose.yml` : `${dir.name}/docker-compose.yml`;
-                    const rawUrl = getRawUrl(owner, repo, branch, composePath);
+                    const composeUrl = getRawUrl(owner, repo, branch, folder.compose!);
+                    const composeRes = await fetch(composeUrl);
+                    if (!composeRes.ok) return null;
+                    const composeText = await composeRes.text();
 
-                    const res = await fetch(rawUrl);
-                    if (!res.ok) return null;
+                    const iconUrl = folder.icon ? getRawUrl(owner, repo, branch, folder.icon) : undefined;
+                    const baseUrl = getRawUrl(owner, repo, branch, folder.folderPath);
 
-                    const text = await res.text();
+                    // Try Umbrel Metadata first
+                    if (folder.umbrel) {
+                        const metaUrl = getRawUrl(owner, repo, branch, folder.umbrel);
+                        const metaRes = await fetch(metaUrl);
+                        if (metaRes.ok) {
+                            const metaText = await metaRes.text();
+                            const umbrelApp = parseUmbrelApp(metaText, composeText, iconUrl, baseUrl);
+                            if (umbrelApp) return umbrelApp;
+                        }
+                    }
 
-                    // Parse
-                    return parseCasaOSApp(dir.name, text);
+                    // Combined config.json + docker-compose metadata (BigBear style)
+                    let configText: string | undefined;
+                    if (folder.config) {
+                        const configUrl = getRawUrl(owner, repo, branch, folder.config);
+                        const configRes = await fetch(configUrl);
+                        if (configRes.ok) configText = await configRes.text();
+                    }
+
+                    return parseCombinedMetadata(folder.id, composeText, configText, iconUrl);
                 } catch (e) {
-                    console.warn(`Failed to fetch/parse app ${dir.name}`, e);
                     return null;
                 }
             });
@@ -95,7 +111,6 @@ const fetchGitHubApps = async (owner: string, repo: string, branch: string = 'ma
         }
 
         return apps;
-
     } catch (e) {
         console.error('GitHub fetch failed', e);
         throw e;

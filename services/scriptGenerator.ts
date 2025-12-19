@@ -2,7 +2,8 @@ import { DeploymentConfig } from '../types';
 import yaml from 'js-yaml';
 
 /**
- * Cleans the Compose file by removing CasaOS specific metadata and applying UI overrides (Env Vars).
+ * Cleans the Compose file by removing CasaOS specific metadata and applying UI overrides.
+ * Translates /DATA/AppData/$AppID paths as defined in convert-apps.sh.
  */
 export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): { yaml: string, volumes: string[] } => {
   try {
@@ -11,27 +12,21 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
 
     if (!doc || !doc.services) return { yaml: rawYaml, volumes: [] };
 
-    // Remove top-level x-casaos
     if (doc['x-casaos']) delete doc['x-casaos'];
 
-    // Process services
+    let mainServiceName = Object.keys(doc.services)[0];
+    
     for (const serviceName in doc.services) {
       const service = doc.services[serviceName];
 
-      // Remove service-level x-casaos
       if (service['x-casaos']) delete service['x-casaos'];
 
-      // Apply Environment Variable Overrides from UI
       if (config.envVars && Object.keys(config.envVars).length > 0) {
-        // We prefer object syntax for cleanliness in output
         if (Array.isArray(service.environment)) {
-            // Convert array to object to merge
             const envObj: Record<string, string> = {};
             service.environment.forEach((e: string) => {
                 const parts = e.split('=');
-                const k = parts[0];
-                const v = parts.slice(1).join('=');
-                if (k) envObj[k] = v;
+                if (parts.length >= 2) envObj[parts[0]] = parts.slice(1).join('=');
             });
             service.environment = { ...envObj, ...config.envVars };
         } else {
@@ -39,22 +34,23 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
         }
       }
 
-      // Collect and Clean Volumes
       if (service.volumes && Array.isArray(service.volumes)) {
-        service.volumes = service.volumes.map((vol: string) => {
-           // CasaOS legacy path cleanup
-           let finalVol = vol.replace(/^\/DATA\/AppData\/[^/]+\//, './data/').replace(/^\/DATA\/AppData\/[^/]+/, './data');
-           
-           // Extract host path to create directories later inside the LXC
+        service.volumes = service.volumes.map((vol: any) => {
+           let finalVol = vol;
            let hostPath = '';
-           if (typeof finalVol === 'string') {
+
+           if (typeof vol === 'string') {
+               // BigBear conversion script logic: replace /DATA/AppData/$AppID with local data path
+               finalVol = vol.replace(/\/DATA\/AppData\/[^/]+/g, './data');
                hostPath = finalVol.split(':')[0];
-           } else if (typeof finalVol === 'object' && (finalVol as any).source) {
-               hostPath = (finalVol as any).source;
+           } else if (typeof vol === 'object' && vol !== null) {
+               if (vol.source && typeof vol.source === 'string') {
+                   vol.source = vol.source.replace(/\/DATA\/AppData\/[^/]+/g, './data');
+                   hostPath = vol.source;
+               }
+               finalVol = vol;
            }
 
-           // We only care about creating paths that look like paths (start with / or .)
-           // Named volumes (just "db_data") are handled by docker automatically
            if (hostPath && (hostPath.startsWith('/') || hostPath.startsWith('./'))) {
                extractedVolumes.push(hostPath);
            }
@@ -63,15 +59,16 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
         });
       }
       
-      // Ensure Ports are strings
-      if (service.ports && Array.isArray(service.ports)) {
+      if (serviceName === mainServiceName && config.hostPort && config.containerPort) {
+          service.ports = [`${config.hostPort}:${config.containerPort}`];
+      } else if (service.ports && Array.isArray(service.ports)) {
           service.ports = service.ports.map((p: any) => p.toString());
       }
     }
 
     return { 
         yaml: yaml.dump(doc, { lineWidth: -1, noRefs: true, quotingType: '"' }),
-        volumes: [...new Set(extractedVolumes)] // Deduplicate
+        volumes: [...new Set(extractedVolumes)]
     };
   } catch (e) {
     console.error("Error parsing YAML:", e);
@@ -79,16 +76,11 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
   }
 };
 
-/**
- * Generates a Bash script to be run on the Proxmox HOST.
- */
 export const generateProxmoxScript = (config: DeploymentConfig): string => {
   const { yaml: cleanedYaml, volumes } = cleanComposeContent(config.composeContent, config);
   
-  // Escape for heredoc
   const safeYaml = cleanedYaml.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 
-  // Network Configuration Logic
   let netConfig = `name=eth0,bridge=${config.bridge},ip=dhcp`;
   if (!config.useDhcp && config.staticIp) {
       netConfig = `name=eth0,bridge=${config.bridge},ip=${config.staticIp}`;
@@ -97,8 +89,6 @@ export const generateProxmoxScript = (config: DeploymentConfig): string => {
       }
   }
 
-  // Volume Creation Commands to run INSIDE the container
-  // Logic: if it starts with ./ it is relative to /opt/APP_ID/
   const volumeCreationCmds = volumes.map(v => {
       if (v.startsWith('./')) {
           return `mkdir -p "/opt/${config.appId}/${v.substring(2)}"`;
@@ -107,28 +97,18 @@ export const generateProxmoxScript = (config: DeploymentConfig): string => {
   }).join('\n');
 
   return `#!/usr/bin/env bash
-
-# ==============================================================================
-# App Converter - Automated Proxmox LXC Installer
-# App: ${config.appName}
-# Target: Docker in Unprivileged LXC
-# Generated by: App Converter
-# ==============================================================================
-
 set -e
 
-# --- Configuration Variables ---
 APP_ID="${config.appId}"
 HOSTNAME="${config.appId}"
-PASSWORD="${config.password || 'password'}"
+PASSWORD='${(config.password || 'password').replace(/'/g, "'\\''")}'
 DISK_SIZE="${config.diskSize}"
 CPU_CORES="${config.cpuCores}"
 RAM_SIZE="${config.ramSize}"
 STORAGE="${config.storagePool}"
 TEMPLATE_SEARCH="debian-12-standard"
-CT_ID_START=105
+CTID="${config.ctId}"
 
-# --- Styling & Helpers ---
 YW='\\e[1;33m'
 GN='\\e[0;32m'
 RD='\\e[0;31m'
@@ -138,36 +118,24 @@ function msg_info() { echo -e "\${YW}[INFO] \${1}\${CL}"; }
 function msg_ok() { echo -e "\${GN}[OK] \${1}\${CL}"; }
 function msg_err() { echo -e "\${RD}[ERROR] \${1}\${CL}"; }
 
-# --- 1. Find Next Free CTID ---
-function get_next_id() {
-    local next_id=\$CT_ID_START
-    while pct status \$next_id &>/dev/null; do
-        next_id=\$((next_id + 1))
-    done
-    echo \$next_id
-}
-CTID=\$(get_next_id)
-
 msg_info "Starting Automated Installation for ${config.appName}..."
-msg_info "Container ID: \${CTID}"
-msg_info "Hostname:     \${HOSTNAME}"
 
-# --- 2. Template Management ---
-msg_info "Checking for Debian 12 Template..."
 TEMPLATE_VOL=$(pveam available -section system | grep "\$TEMPLATE_SEARCH" | head -n 1 | awk '{print $2}')
 if [ -z "$TEMPLATE_VOL" ]; then
-    msg_err "Template \$TEMPLATE_SEARCH not found. Please run 'pveam update'."
+    msg_err "Template \$TEMPLATE_SEARCH not found."
     exit 1
 fi
 
 if ! pveam list local | grep -q "\$TEMPLATE_VOL"; then
-    msg_info "Downloading template \$TEMPLATE_VOL..."
     pveam download local \$TEMPLATE_VOL
 fi
 TEMPLATE="local:vztmpl/\$TEMPLATE_VOL"
 
-# --- 3. Create Container (Automated Wizard) ---
-msg_info "Creating LXC Container..."
+if pct status \$CTID &>/dev/null; then
+    msg_err "Container ID \$CTID is already in use."
+    exit 1
+fi
+
 pct create \$CTID \$TEMPLATE \\
     --arch amd64 \\
     --hostname \$HOSTNAME \\
@@ -182,71 +150,45 @@ pct create \$CTID \$TEMPLATE \\
     --features nesting=1,keyctl=1 \\
     --onboot 1
 
-msg_ok "LXC Container created successfully."
-
-# --- 4. Start & Wait for Network ---
-msg_info "Starting container..."
 pct start \$CTID
 msg_info "Waiting for network connectivity..."
 lxc-attach -n \$CTID -- bash -c "for i in {1..50}; do ping -c1 8.8.8.8 &>/dev/null && break; sleep 1; done"
 
-# --- 5. Install Dependencies & Docker (Inside Container) ---
-msg_info "Installing Docker & Environment inside container..."
-
-lxc-attach -n \$CTID -- bash -c "cat <<EOF > /tmp/install_internal.sh
+lxc-attach -n \$CTID -- bash -c "cat <<'EOF' > /tmp/install_internal.sh
 #!/bin/bash
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
-echo 'Updating system...'
-apt-get update -qq && apt-get upgrade -y -qq
-apt-get install -y -qq curl git ca-certificates gnupg lsb-release
+apt-get update -qq
+apt-get install -y -qq curl git ca-certificates gnupg lsb-release jq iptables
 
-echo 'Installing Docker...'
 if ! command -v docker &> /dev/null; then
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sh get-docker.sh >/dev/null 2>&1
-    rm get-docker.sh
+    curl -fsSL https://get.docker.com | sh
 fi
 
-echo 'Pre-creating volume directories...'
+systemctl enable --now docker || true
+
 mkdir -p /opt/\$APP_ID
 cd /opt/\$APP_ID
 ${volumeCreationCmds}
 
-echo 'Writing docker-compose.yml...'
-cat <<YML > docker-compose.yml
+cat <<'YML' > docker-compose.yml
 ${safeYaml}
 YML
 
-echo 'Starting Application...'
-docker compose pull -q
 docker compose up -d
-
-echo 'Cleaning up...'
-apt-get autoremove -y -qq
-apt-get autoclean -y -qq
 EOF
 "
 
-# Execute the internal script
 lxc-attach -n \$CTID -- bash /tmp/install_internal.sh
 
-# --- 6. Final Status ---
 IP=\$(pct exec \$CTID -- ip a s dev eth0 | awk '/inet / {print \$2}' | cut -d/ -f1)
 
 msg_ok "Installation Complete!"
-echo -e "\${GN}--------------------------------------------------\${CL}"
-echo -e " Application: ${config.appName}"
-echo -e " IP Address:  \${IP}"
-echo -e " Host Port:   ${config.hostPort}"
-echo -e " URL:         http://\${IP}:${config.hostPort}"
-echo -e "\${GN}--------------------------------------------------\${CL}"
+echo -e " URL: http://\${IP}:${config.hostPort}"
 `;
 };
 
-/**
- * Generates a Stack file for Dockge or Portainer.
- */
 export const generateStackFile = (config: DeploymentConfig): string => {
   return cleanComposeContent(config.composeContent, config).yaml;
 };

@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { Repo } from '../types';
-import { X, Plus, RefreshCw, Trash2, Github, Globe } from 'lucide-react';
+import { X, Plus, RefreshCw, Trash2, Github, Globe, Loader2 } from 'lucide-react';
 
 interface SettingsPanelProps {
   isOpen: boolean;
   onClose: () => void;
   repositories: Repo[];
-  onAddRepo: (name: string, url: string) => void;
+  onAddRepo: (name: string, url: string) => Promise<void>;
   onRemoveRepo: (id: string) => void;
-  onSync: () => void | Promise<void>;
+  onSync: () => Promise<void>;
+  isSyncingExternal: boolean;
+  syncStatus?: string;
 }
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ 
@@ -17,26 +19,35 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   repositories, 
   onAddRepo, 
   onRemoveRepo,
-  onSync 
+  onSync,
+  isSyncingExternal,
+  syncStatus
 }) => {
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoUrl, setNewRepoUrl] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isLocalFetching, setIsLocalFetching] = useState(false);
 
-  const handleAdd = () => {
+  const isSyncing = isSyncingExternal || isLocalFetching;
+
+  const handleAdd = async () => {
     if (newRepoName && newRepoUrl) {
-      onAddRepo(newRepoName, newRepoUrl);
-      setNewRepoName('');
-      setNewRepoUrl('');
+      setIsLocalFetching(true);
+      try {
+        await onAddRepo(newRepoName, newRepoUrl);
+        setNewRepoName('');
+        setNewRepoUrl('');
+      } finally {
+        setIsLocalFetching(false);
+      }
     }
   };
 
   const handleSync = async () => {
-    setIsSyncing(true);
+    setIsLocalFetching(true);
     try {
       await onSync();
     } finally {
-      setIsSyncing(false);
+      setIsLocalFetching(false);
     }
   };
 
@@ -58,15 +69,22 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <h2 className="text-xl font-bold text-white">Repositories</h2>
                 <p className="text-xs text-slate-500">Manage your App Store sources</p>
             </div>
-            <div className="flex items-center gap-2">
-                 <button 
-                    onClick={handleSync}
-                    disabled={isSyncing}
-                    className={`p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-orange-500 transition-all ${isSyncing ? 'animate-spin opacity-50' : ''}`}
-                    title="Sync Repositories"
-                 >
-                    <RefreshCw className="w-5 h-5" />
-                 </button>
+            <div className="flex items-center gap-4">
+                 <div className="flex items-center gap-3">
+                    {syncStatus && isSyncing && (
+                        <span className="text-xs font-medium text-orange-500 animate-pulse hidden md:inline">
+                            {syncStatus}
+                        </span>
+                    )}
+                    <button 
+                        onClick={handleSync}
+                        disabled={isSyncing}
+                        className={`p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-orange-500 transition-all ${isSyncing ? 'opacity-50' : ''}`}
+                        title="Sync Repositories"
+                    >
+                        <RefreshCw className={`w-5 h-5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    </button>
+                 </div>
                 <button 
                     onClick={onClose}
                     className="p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
@@ -105,10 +123,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     </div>
                     <button 
                         onClick={handleAdd}
-                        disabled={!newRepoName || !newRepoUrl}
-                        className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 rounded-lg text-sm font-bold transition-colors"
+                        disabled={!newRepoName || !newRepoUrl || isSyncing}
+                        className="w-full bg-orange-600 hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 shadow-lg"
                     >
-                        Add Repository
+                        {isSyncing && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {isSyncing ? (syncStatus || 'Fetching Apps...') : 'Add Repository'}
                     </button>
                 </div>
             </div>
@@ -122,7 +141,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             <div className="flex-grow min-w-0 pr-4">
                                 <div className="flex items-center gap-2 mb-1">
                                     <h4 className="font-bold text-white truncate">{repo.name}</h4>
-                                    <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded">{repo.apps.length} apps</span>
+                                    <span className="text-[10px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                        {repo.apps.length} apps
+                                    </span>
                                 </div>
                                 <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
                                     {repo.url && repo.url.includes('github') ? <Github className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
@@ -147,8 +168,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
           {/* Footer */}
           <div className="p-4 border-t border-slate-800 bg-slate-950 text-center">
+              {syncStatus && !isSyncing && (
+                  <p className="text-xs font-bold text-green-500 mb-2">{syncStatus}</p>
+              )}
               <p className="text-[10px] text-slate-600">
-                  App Converter v1.2.0 • Data provided by Community Scripts & BigBear
+                  App Converter v1.5.0 • Data provided by Community Scripts & BigBear
               </p>
           </div>
         </div>
