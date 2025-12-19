@@ -172,7 +172,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   <p className="text-xs font-bold text-green-500 mb-2">{syncStatus}</p>
               )}
               <p className="text-[10px] text-slate-600">
-                  App Converter v1.5.0 • Data provided by Community Scripts & BigBear
+                  Deploy Anywhere App Converter v1.6.3 •  by GlitchLab
               </p>
           </div>
         </div>

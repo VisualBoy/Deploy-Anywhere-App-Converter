@@ -74,6 +74,7 @@ export interface CasaOSMetadata {
     project_url?: string;
     index?: string;
     architectures?: string[];
+    source_code?: string;
 }
 
 export interface UmbrelMetadata {
@@ -107,4 +108,8 @@ export interface ConfigJsonMetadata {
     image?: string;
     youtube?: string;
     docs_link?: string;
+    repo_url?: string;
+    github?: string;
+    support_url?: string;
+    discord?: string;
 }

@@ -58,13 +58,15 @@ export const parseCombinedMetadata = (
             compose: composeContent,
             port_map: xCasa.port_map || config?.port?.toString() || '',
             env_vars,
-            author: xCasa.author || config?.author || 'BigBearTechWorld',
+            author: xCasa.author || config?.author || 'Community',
             developer: xCasa.developer || config?.developer || '',
             version: config?.version || 'latest',
             screenshots: xCasa.screenshot_link || config?.screenshots || [],
             youtube: config?.youtube || '',
             docs_link: config?.docs_link || '',
             website: xCasa.index || xCasa.project_url || '',
+            repo_link: config?.repo_url || config?.github || xCasa.source_code || '',
+            support_link: config?.support_url || config?.discord || '',
             architectures: xCasa.architectures || ['amd64', 'arm64'],
             main_service: mainService
         };

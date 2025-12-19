@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0] - 2025-12-21
+### Refactored
+- **Architecture Overhaul**: Separated business logic from the UI.
+  - Extracted repository management into `useRepoManager` hook.
+  - Extracted deployment configuration and state into `useDeploymentManager` hook.
+  - Created `services/storage.ts` to centralize LocalStorage operations and default configuration logic.
+- **Codebase Cleanup**: Simplified `App.tsx` to serve purely as a view controller.
+
+### Added
+- **Screenshot Lightbox**: Added a full-screen image viewer (lightbox) for app screenshots in the details modal.
+- **Configuration Template**: Renamed `.env.example` to `env.example` for better clarity on environment variable defaults.
+
+### Fixed
+- **Link Parsing**: Fixed an issue where external links (Source, Support, Website) were not being parsed or displayed correctly in the App Details modal.
+- **Metadata Extraction**: Updated the parser to correctly extract `repo_url`, `support_url`, and other metadata fields from `config.json` and `compose` files.
+- **Link Navigation**: Ensured all external links open in a new tab with proper security attributes.
+
 ## [1.6.0] - 2025-12-20
 ### Added
 - **BigBear Script Integration**: Integrated advanced parsing logic from `convert-apps.sh` to handle complex metadata merging from `config.json`, `docker-compose.yml`, and `umbrel-app.yml`.

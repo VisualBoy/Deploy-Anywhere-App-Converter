@@ -76,8 +76,34 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
   }
 };
 
+export const generateExecutionCommand = (scriptContent: string): string => {
+    // UTF-8 safe base64 encoding
+    const encoded = btoa(unescape(encodeURIComponent(scriptContent)));
+    return `echo "${encoded}" | base64 -d | bash`;
+};
+
 export const generateProxmoxScript = (config: DeploymentConfig): string => {
-  const { yaml: cleanedYaml, volumes } = cleanComposeContent(config.composeContent, config);
+  // 1. Identify secrets that need auto-generation
+  const secretKeywords = ['PASSWORD', 'SECRET', 'KEY', 'TOKEN', 'AUTH'];
+  const autoGenKeys: string[] = [];
+  
+  // Clone config to avoid mutating state
+  const modifiedConfig = { ...config, envVars: { ...config.envVars } };
+
+  Object.entries(modifiedConfig.envVars).forEach(([key, value]) => {
+      const upperKey = key.toUpperCase();
+      const isSecretCandidate = secretKeywords.some(k => upperKey.includes(k));
+      const isEmptyOrAuto = !value || value.toLowerCase() === 'auto';
+
+      if (isSecretCandidate && isEmptyOrAuto) {
+          autoGenKeys.push(key);
+          // Set a unique placeholder in the YAML so we can SED it later
+          modifiedConfig.envVars[key] = `__AUTO_GEN_${key}__`;
+      }
+  });
+
+  // 2. Clean yaml with placeholders
+  const { yaml: cleanedYaml, volumes } = cleanComposeContent(modifiedConfig.composeContent, modifiedConfig);
   
   const safeYaml = cleanedYaml.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 
@@ -95,6 +121,26 @@ export const generateProxmoxScript = (config: DeploymentConfig): string => {
       }
       return `mkdir -p "${v}"`;
   }).join('\n');
+
+  // 3. Construct Bash logic for secrets
+  let secretGenerationScript = "";
+  if (autoGenKeys.length > 0) {
+      secretGenerationScript += `
+msg_info "Generating secure credentials..."
+echo "# Auto-generated credentials for ${config.appName}" > /opt/${config.appId}/install_details.conf
+echo "# Generated on $(date)" >> /opt/${config.appId}/install_details.conf
+echo "" >> /opt/${config.appId}/install_details.conf
+
+`;
+      autoGenKeys.forEach(key => {
+          const bashVarName = `GEN_${key.replace(/[^a-zA-Z0-9]/g, '_')}`;
+          // Generate alphanumeric secret (safer for sed replacement than raw base64)
+          secretGenerationScript += `${bashVarName}=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9')\n`;
+          secretGenerationScript += `sed -i "s|__AUTO_GEN_${key}__|$\{${bashVarName}\}|g" docker-compose.yml\n`;
+          secretGenerationScript += `echo "${key}=$\{${bashVarName}\}" >> /opt/${config.appId}/install_details.conf\n`;
+      });
+      secretGenerationScript += `\nmsg_ok "Credentials saved to /opt/${config.appId}/install_details.conf"\n`;
+  }
 
   return `#!/usr/bin/env bash
 set -e
@@ -160,7 +206,7 @@ set -e
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -qq
-apt-get install -y -qq curl git ca-certificates gnupg lsb-release jq iptables
+apt-get install -y -qq curl git ca-certificates gnupg lsb-release jq iptables openssl
 
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com | sh
@@ -172,9 +218,13 @@ mkdir -p /opt/\$APP_ID
 cd /opt/\$APP_ID
 ${volumeCreationCmds}
 
+# Write initial compose file with placeholders
 cat <<'YML' > docker-compose.yml
 ${safeYaml}
 YML
+
+# Inject Auto-Generated Secrets
+${secretGenerationScript}
 
 docker compose up -d
 EOF
@@ -186,6 +236,7 @@ IP=\$(pct exec \$CTID -- ip a s dev eth0 | awk '/inet / {print \$2}' | cut -d/ -
 
 msg_ok "Installation Complete!"
 echo -e " URL: http://\${IP}:${config.hostPort}"
+echo -e " Credentials saved to: /opt/\$APP_ID/install_details.conf inside container \$CTID"
 `;
 };
 

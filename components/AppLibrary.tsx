@@ -106,10 +106,10 @@ export const AppLibrary: React.FC<AppLibraryProps> = ({
           absolute inset-0 z-30 bg-slate-900 
           md:relative md:inset-auto md:w-80 lg:w-96 md:border-r border-slate-800 
           flex flex-col p-6 shadow-2xl md:shadow-xl shrink-0 
-          transition-transform duration-300 ease-in-out
+          transition-transform duration-300 ease-in-out overflow-y-auto custom-scrollbar
           ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0
       `}>
-        <div className="mb-8">
+        <div className="mb-6 shrink-0">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Source Market</label>
             <div className="relative mb-5 group">
                 <select 
@@ -141,7 +141,11 @@ export const AppLibrary: React.FC<AppLibraryProps> = ({
             </div>
         </div>
 
-        <div className="mt-auto flex flex-col gap-4">
+        <button onClick={() => setIsSidebarOpen(false)} className="md:hidden w-full bg-orange-600 hover:bg-orange-500 text-white py-3 rounded-lg font-bold shadow-lg flex items-center justify-center gap-2 mb-8 shrink-0 active:scale-95 transition-all">
+            Browse Apps <ArrowRight className="w-5 h-5" />
+        </button>
+
+        <div className="mt-auto flex flex-col gap-4 shrink-0">
              <div className="flex flex-col items-center justify-center p-6 bg-slate-800/30 rounded-xl border border-dashed border-slate-700">
                  <FileJson className="w-10 h-10 text-orange-500/50 mb-3" />
                  <p className="text-slate-400 text-sm mb-4 text-center">Have a custom Docker Compose?</p>
@@ -149,9 +153,6 @@ export const AppLibrary: React.FC<AppLibraryProps> = ({
                     <span>Import YAML</span>
                 </button>
             </div>
-            <button onClick={() => setIsSidebarOpen(false)} className="md:hidden w-full bg-orange-600 text-white py-3 rounded-lg font-bold shadow-lg flex items-center justify-center gap-2">
-                Browse Apps <ArrowRight className="w-5 h-5" />
-            </button>
         </div>
       </aside>
 
