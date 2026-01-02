@@ -7,8 +7,11 @@
 ## 🚀 Core Features
 
 * **Multi-Source Library**: Browse and search apps from CasaOS, BigBear, and ZimoOS repositories.
-* **YAML-to-LXC Engine**: Intelligent Docker Compose parser that automatically extracts ports, volumes, environment variables, and commands.
-* **Proxmox Automation**: Generates "host-side" Bash scripts that automate LXC container creation, Docker installation, and app deployment (inspired by *Proxmox VE Community Scripts*).
+* **Smart Matching Engine**: Automatically detects if a **Native LXC Script** exists for a selected Docker app by querying the official [Proxmox VE Community Scripts](https://github.com/community-scripts/ProxmoxVE) repository.
+* **YAML-to-LXC Engine**: Intelligent Docker Compose parser that automatically extracts ports, volumes, environment variables, and commands for Docker fallback deployments.
+* **Proxmox Automation**: Generates "host-side" Bash scripts that:
+    * **Native Mode**: Downloads and runs the official upstream install script (e.g., for Plex, Home Assistant).
+    * **Docker Mode**: Creates an LXC, installs Docker, and deploys the Compose stack if no native script is found.
 * **Configuration Wizard**: A guided 4-step process using collapsible accordion sections to manage:
     * **Resources**: CPU, RAM, Disk, Storage Pool.
     * **Network**: Static IP/CIDR, Gateway, Bridge.
@@ -40,15 +43,16 @@ The project leverages a modern stack focused on execution speed and portability:
 * **Frontend**: React 18 with TypeScript.
 * **Styling**: Tailwind CSS for a responsive, accordion-based UI.
 * **YAML Parsing**: `js-yaml` for programmatic manipulation of compose files.
-* **Script Generation**: A dedicated service (`scriptGenerator.ts`) transforms UI configurations into Bash scripts compliant with the `build.func` standard.
+* **Dynamic Catalog**: A dedicated service (`community.ts`) fetches the live tree from GitHub to ensure script availability is always up-to-date.
+* **Script Generation**: `scriptGenerator.ts` transforms UI configurations into Bash scripts, wrapping either the official community installer or a custom Docker deployment logic.
 
 ### Proxmox Script Logic
 Unlike a simple converter, the tool generates a script that:
 1.  Validates resources on the Proxmox host.
 2.  Allocates the next available VM ID.
 3.  Creates the LXC container with specific templates (e.g., Debian 12).
-4.  Injects Docker dependencies.
-5.  Automatically creates persistent directories on the LXC based on the detected volume mapping.
+4.  **Recipe Selection**: Checks if an official community script exists for the app; if so, executes it. If not, it installs Docker and deploys the generated Compose stack.
+5.  Injects Docker dependencies and automatically creates persistent directories on the LXC based on the detected volume mapping (in Docker Mode).
 
 ## 📱 Mobile UX
 The design includes specific optimizations for developers operating from mobile devices:

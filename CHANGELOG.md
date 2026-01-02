@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2025-12-22
+### Added
+- **Dynamic Community Scripts**: The application now fetches the live list of installation scripts directly from the `community-scripts/ProxmoxVE` GitHub repository at runtime.
+- **Smart Recipe Matching**: Implemented intelligent matching logic that correlates Docker image names (e.g., `linuxserver/plex`) with available Community Scripts to prioritize "Bare Metal" LXC installations over Docker-inside-LXC.
+
+### Changed
+- **Script Generation**: Refactored the generator to act as a wrapper for upstream scripts when available, ensuring users always get the latest installation logic maintained by the community.
+- **Fallback Logic**: The system now strictly uses Docker deployment as a fallback mechanism only when no matching native script is found in the community catalog.
+
+### Removed
+- **Static Recipes**: Removed `RECIPES` constant with hardcoded install commands in favor of the dynamic fetcher.
+
 ## [1.7.0] - 2025-12-21
 ### Refactored
 - **Architecture Overhaul**: Separated business logic from the UI.
