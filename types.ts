@@ -34,6 +34,16 @@ export interface DeploymentConfig {
   appId: string;
   appName: string;
   target: TargetPlatform;
+  /**
+   * The Docker image name of the main service.
+   * Used to match against Native Recipes.
+   */
+  mainImage?: string;
+  /**
+   * The matched Proxmox Community Script ID (e.g. 'plex', 'homeassistant').
+   * If present, the generator uses the official script.
+   */
+  communityScript?: string;
   password?: string;
   ctId: number;
   hostPort: string;

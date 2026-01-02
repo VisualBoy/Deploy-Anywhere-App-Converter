@@ -7,9 +7,12 @@ import {
     loadDefaultsFromStorage, 
     saveDefaultsToStorage 
 } from '../services/storage';
+import { fetchCommunityScripts, normalizeName } from '../services/community';
+import yaml from 'js-yaml';
 
 export const useDeploymentManager = () => {
     const [globalDefaults, setGlobalDefaults] = useState(loadDefaultsFromStorage);
+    const [availableScripts, setAvailableScripts] = useState<string[]>([]);
     
     const [config, setConfig] = useState<DeploymentConfig>(() => ({
         ...DEFAULT_GLOBAL_SETTINGS,
@@ -21,12 +24,19 @@ export const useDeploymentManager = () => {
         volumePath: './data',
         envVars: {},
         composeContent: '',
+        mainImage: '',
+        communityScript: undefined
     }));
 
     const [target, setTarget] = useState<TargetPlatform | null>(null);
     const [deploymentLog, setDeploymentLog] = useState<string[]>([]);
     const [deploying, setDeploying] = useState(false);
     const [deployed, setDeployed] = useState(false);
+
+    // Load Community Scripts on Mount
+    useEffect(() => {
+        fetchCommunityScripts().then(setAvailableScripts);
+    }, []);
 
     // Persist Global Defaults
     useEffect(() => {
@@ -57,7 +67,9 @@ export const useDeploymentManager = () => {
     const initializeConfigForApp = (app: AppDefinition) => {
         let hPort = '8080';
         let cPort = '80';
+        let mainImage = '';
         
+        // Port Extraction
         if(app.port_map) {
             const parts = app.port_map.split(':');
             if(parts.length === 2) {
@@ -69,6 +81,43 @@ export const useDeploymentManager = () => {
             }
         }
 
+        // Main Image Extraction
+        try {
+            const doc = yaml.load(app.compose) as any;
+            if (doc && doc.services) {
+                const serviceName = app.main_service || Object.keys(doc.services)[0];
+                if (doc.services[serviceName]) {
+                    mainImage = doc.services[serviceName].image || '';
+                }
+            }
+        } catch (e) {
+            console.warn("Failed to extract image from compose", e);
+        }
+
+        // --- Community Script Matching Logic ---
+        let matchedScript: string | undefined = undefined;
+        if (mainImage) {
+            // Extract core name (e.g. linuxserver/plex -> plex)
+            const imageName = mainImage.split('/').pop()?.split(':')[0] || '';
+            const normalizedImage = normalizeName(imageName);
+            const normalizedApp = normalizeName(app.name);
+
+            // 1. Try exact image match (e.g. 'plex' -> 'plex')
+            if (availableScripts.includes(imageName)) {
+                matchedScript = imageName;
+            } 
+            // 2. Try normalized image match (e.g. 'adguardhome' -> 'adguard-home' fuzzy)
+            else {
+                const fuzzyMatch = availableScripts.find(s => normalizeName(s) === normalizedImage);
+                if (fuzzyMatch) matchedScript = fuzzyMatch;
+                else {
+                     // 3. Try app name match (e.g. 'Home Assistant' -> 'homeassistant')
+                    const nameMatch = availableScripts.find(s => normalizeName(s) === normalizedApp);
+                    if (nameMatch) matchedScript = nameMatch;
+                }
+            }
+        }
+        
         setConfig({
             ...globalDefaults,
             appId: app.id,
@@ -78,7 +127,9 @@ export const useDeploymentManager = () => {
             hostPort: hPort,
             containerPort: cPort,
             volumePath: app.volume_map || './data',
-            envVars: app.env_vars || {}
+            envVars: app.env_vars || {},
+            mainImage: mainImage,
+            communityScript: matchedScript
         });
     };
 
@@ -98,6 +149,9 @@ export const useDeploymentManager = () => {
             "Parsing Compose YAML...",
             "Applying environment overrides...",
             "Configuring network...",
+            config.communityScript 
+                ? `Matched Community Script: ${config.communityScript}` 
+                : "No Community Script matched. Using Docker fallback.",
             "Generating script...",
             "Done."
         ];

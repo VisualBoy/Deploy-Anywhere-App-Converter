@@ -1,9 +1,9 @@
 import { DeploymentConfig } from '../types';
+import { getCommunityRecipe, NativeRecipe } from './recipes';
 import yaml from 'js-yaml';
 
 /**
  * Cleans the Compose file by removing CasaOS specific metadata and applying UI overrides.
- * Translates /DATA/AppData/$AppID paths as defined in convert-apps.sh.
  */
 export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): { yaml: string, volumes: string[] } => {
   try {
@@ -40,7 +40,6 @@ export const cleanComposeContent = (rawYaml: string, config: DeploymentConfig): 
            let hostPath = '';
 
            if (typeof vol === 'string') {
-               // BigBear conversion script logic: replace /DATA/AppData/$AppID with local data path
                finalVol = vol.replace(/\/DATA\/AppData\/[^/]+/g, './data');
                hostPath = finalVol.split(':')[0];
            } else if (typeof vol === 'object' && vol !== null) {
@@ -82,31 +81,22 @@ export const generateExecutionCommand = (scriptContent: string): string => {
     return `echo "${encoded}" | base64 -d | bash`;
 };
 
+/**
+ * GENERATOR STRATEGY:
+ * 1. Check if a Community Script was matched (config.communityScript).
+ * 2. If yes, generate a Native Script utilizing that official script.
+ * 3. If no, fallback to Docker Script.
+ */
 export const generateProxmoxScript = (config: DeploymentConfig): string => {
-  // 1. Identify secrets that need auto-generation
-  const secretKeywords = ['PASSWORD', 'SECRET', 'KEY', 'TOKEN', 'AUTH'];
-  const autoGenKeys: string[] = [];
+  // Determine if we are using a Native Recipe (Community Script)
+  const nativeRecipe: NativeRecipe | null = config.communityScript 
+    ? getCommunityRecipe(config.communityScript) 
+    : null;
   
-  // Clone config to avoid mutating state
-  const modifiedConfig = { ...config, envVars: { ...config.envVars } };
-
-  Object.entries(modifiedConfig.envVars).forEach(([key, value]) => {
-      const upperKey = key.toUpperCase();
-      const isSecretCandidate = secretKeywords.some(k => upperKey.includes(k));
-      const isEmptyOrAuto = !value || value.toLowerCase() === 'auto';
-
-      if (isSecretCandidate && isEmptyOrAuto) {
-          autoGenKeys.push(key);
-          // Set a unique placeholder in the YAML so we can SED it later
-          modifiedConfig.envVars[key] = `__AUTO_GEN_${key}__`;
-      }
-  });
-
-  // 2. Clean yaml with placeholders
-  const { yaml: cleanedYaml, volumes } = cleanComposeContent(modifiedConfig.composeContent, modifiedConfig);
+  // -- HOST CONFIGURATION --
+  const hostname = config.appId;
+  const password = (config.password || 'password').replace(/'/g, "'\\''");
   
-  const safeYaml = cleanedYaml.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
-
   let netConfig = `name=eth0,bridge=${config.bridge},ip=dhcp`;
   if (!config.useDhcp && config.staticIp) {
       netConfig = `name=eth0,bridge=${config.bridge},ip=${config.staticIp}`;
@@ -115,44 +105,17 @@ export const generateProxmoxScript = (config: DeploymentConfig): string => {
       }
   }
 
-  const volumeCreationCmds = volumes.map(v => {
-      if (v.startsWith('./')) {
-          return `mkdir -p "/opt/${config.appId}/${v.substring(2)}"`;
-      }
-      return `mkdir -p "${v}"`;
-  }).join('\n');
+  const osTemplate = nativeRecipe ? nativeRecipe.osTemplate : 'debian-12-standard';
 
-  // 3. Construct Bash logic for secrets
-  let secretGenerationScript = "";
-  if (autoGenKeys.length > 0) {
-      secretGenerationScript += `
-msg_info "Generating secure credentials..."
-echo "# Auto-generated credentials for ${config.appName}" > /opt/${config.appId}/install_details.conf
-echo "# Generated on $(date)" >> /opt/${config.appId}/install_details.conf
-echo "" >> /opt/${config.appId}/install_details.conf
-
-`;
-      autoGenKeys.forEach(key => {
-          const bashVarName = `GEN_${key.replace(/[^a-zA-Z0-9]/g, '_')}`;
-          // Generate alphanumeric secret (safer for sed replacement than raw base64)
-          secretGenerationScript += `${bashVarName}=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9')\n`;
-          secretGenerationScript += `sed -i "s|__AUTO_GEN_${key}__|$\{${bashVarName}\}|g" docker-compose.yml\n`;
-          secretGenerationScript += `echo "${key}=$\{${bashVarName}\}" >> /opt/${config.appId}/install_details.conf\n`;
-      });
-      secretGenerationScript += `\nmsg_ok "Credentials saved to /opt/${config.appId}/install_details.conf"\n`;
-  }
-
-  return `#!/usr/bin/env bash
-set -e
-
+  const hostSetupBlock = `
 APP_ID="${config.appId}"
-HOSTNAME="${config.appId}"
-PASSWORD='${(config.password || 'password').replace(/'/g, "'\\''")}'
+HOSTNAME="${hostname}"
+PASSWORD='${password}'
 DISK_SIZE="${config.diskSize}"
 CPU_CORES="${config.cpuCores}"
 RAM_SIZE="${config.ramSize}"
 STORAGE="${config.storagePool}"
-TEMPLATE_SEARCH="debian-12-standard"
+TEMPLATE_SEARCH="${osTemplate}"
 CTID="${config.ctId}"
 
 YW='\\e[1;33m'
@@ -165,6 +128,7 @@ function msg_ok() { echo -e "\${GN}[OK] \${1}\${CL}"; }
 function msg_err() { echo -e "\${RD}[ERROR] \${1}\${CL}"; }
 
 msg_info "Starting Automated Installation for ${config.appName}..."
+${nativeRecipe ? `msg_info "Using Official Community Script: ${nativeRecipe.name}"` : `msg_info "No Native Recipe found. Using Docker Fallback."`}
 
 TEMPLATE_VOL=$(pveam available -section system | grep "\$TEMPLATE_SEARCH" | head -n 1 | awk '{print $2}')
 if [ -z "$TEMPLATE_VOL" ]; then
@@ -199,8 +163,62 @@ pct create \$CTID \$TEMPLATE \\
 pct start \$CTID
 msg_info "Waiting for network connectivity..."
 lxc-attach -n \$CTID -- bash -c "for i in {1..50}; do ping -c1 8.8.8.8 &>/dev/null && break; sleep 1; done"
+`;
 
-lxc-attach -n \$CTID -- bash -c "cat <<'EOF' > /tmp/install_internal.sh
+  // -- INNER SCRIPT GENERATION --
+  let innerScriptContent = '';
+  let finalMessage = '';
+
+  if (nativeRecipe) {
+      // --- NATIVE RECIPE PATH (COMMUNITY SCRIPT) ---
+      innerScriptContent = `
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+
+function msg_info() { echo -e "\\e[1;33m[INFO] \\e[0m\${1}"; }
+
+${nativeRecipe.installCommands(config)}
+`;
+      const msg = nativeRecipe.postInstallMsg;
+      finalMessage = (typeof msg === 'function' ? msg(config) : msg) || `Native installation of ${config.appName} complete!`;
+
+  } else {
+      // --- DOCKER FALLBACK PATH ---
+      const { yaml: cleanedYaml, volumes } = cleanComposeContent(config.composeContent, config);
+      const safeYaml = cleanedYaml.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+      
+      const volumeCreationCmds = volumes.map(v => {
+        if (v.startsWith('./')) {
+            return `mkdir -p "/opt/${config.appId}/${v.substring(2)}"`;
+        }
+        return `mkdir -p "${v}"`;
+      }).join('\n');
+
+      const secretKeywords = ['PASSWORD', 'SECRET', 'KEY', 'TOKEN', 'AUTH'];
+      const autoGenKeys: string[] = [];
+      const modifiedConfig = { ...config, envVars: { ...config.envVars } };
+
+      Object.entries(modifiedConfig.envVars).forEach(([key, value]) => {
+          if (secretKeywords.some(k => key.toUpperCase().includes(k)) && (!value || value.toLowerCase() === 'auto')) {
+              autoGenKeys.push(key);
+          }
+      });
+
+      let secretGenerationScript = "";
+      if (autoGenKeys.length > 0) {
+          secretGenerationScript += `
+echo "# Auto-generated credentials" > /opt/${config.appId}/install_details.conf
+`;
+          autoGenKeys.forEach(key => {
+              const bashVarName = `GEN_${key.replace(/[^a-zA-Z0-9]/g, '_')}`;
+              secretGenerationScript += `${bashVarName}=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9')\n`;
+              secretGenerationScript += `sed -i "s|__AUTO_GEN_${key}__|$\{${bashVarName}\}|g" docker-compose.yml\n`;
+              secretGenerationScript += `echo "${key}=$\{${bashVarName}\}" >> /opt/${config.appId}/install_details.conf\n`;
+          });
+      }
+
+      innerScriptContent = `
 #!/bin/bash
 set -e
 export DEBIAN_FRONTEND=noninteractive
@@ -218,15 +236,24 @@ mkdir -p /opt/\$APP_ID
 cd /opt/\$APP_ID
 ${volumeCreationCmds}
 
-# Write initial compose file with placeholders
 cat <<'YML' > docker-compose.yml
 ${safeYaml}
 YML
 
-# Inject Auto-Generated Secrets
 ${secretGenerationScript}
 
 docker compose up -d
+`;
+      finalMessage = `Docker deployment complete! URL: http://\${IP}:${config.hostPort}`;
+  }
+
+  // -- FINAL ASSEMBLY --
+  return `#!/usr/bin/env bash
+set -e
+${hostSetupBlock}
+
+lxc-attach -n \$CTID -- bash -c "cat <<'EOF' > /tmp/install_internal.sh
+${innerScriptContent}
 EOF
 "
 
@@ -234,9 +261,8 @@ lxc-attach -n \$CTID -- bash /tmp/install_internal.sh
 
 IP=\$(pct exec \$CTID -- ip a s dev eth0 | awk '/inet / {print \$2}' | cut -d/ -f1)
 
-msg_ok "Installation Complete!"
-echo -e " URL: http://\${IP}:${config.hostPort}"
-echo -e " Credentials saved to: /opt/\$APP_ID/install_details.conf inside container \$CTID"
+msg_ok "${finalMessage}"
+echo -e " IP Address: \${IP}"
 `;
 };
 
