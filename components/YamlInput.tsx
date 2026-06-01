@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AppDefinition } from '../types';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import yaml from 'js-yaml';
+import { sanitizeYaml } from '../services/appParser';
 
 interface YamlInputProps {
     onBack: () => void;
@@ -20,7 +21,7 @@ export const YamlInput: React.FC<YamlInputProps> = ({ onBack, onNext }) => {
         let detectedEnv: Record<string, string> = {};
 
         try {
-            const doc = yaml.load(content) as any;
+            const doc = yaml.load(sanitizeYaml(content)) as any;
             if (doc && doc.services) {
                 // Iterate services to find configurations
                 for (const key of Object.keys(doc.services)) {

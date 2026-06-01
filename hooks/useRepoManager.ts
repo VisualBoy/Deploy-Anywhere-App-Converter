@@ -1,16 +1,46 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Repo } from '../types';
 import { fetchAppsFromUrl } from '../services/repository';
-import { loadReposFromStorage, saveReposToStorage } from '../services/storage';
+import { 
+    loadReposFromStorage, 
+    saveReposToStorage, 
+    getRepoAppsFromIndexedDB, 
+    saveRepoAppsToIndexedDB, 
+    deleteRepoAppsFromIndexedDB 
+} from '../services/storage';
 
 const CACHE_VALIDITY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export const useRepoManager = () => {
     const [repositories, setRepositories] = useState<Repo[]>(loadReposFromStorage);
+    const [isInitialized, setIsInitialized] = useState(false);
     const [isSyncingGlobal, setIsSyncingGlobal] = useState(false);
     const [syncStatus, setSyncStatus] = useState<string>('');
 
-    // Persist Repositories whenever they change
+    // Load cached apps from IndexedDB on start
+    useEffect(() => {
+        const loadCachedApps = async () => {
+            try {
+                const metaRepos = loadReposFromStorage();
+                const loaded: Repo[] = [];
+                for (const repo of metaRepos) {
+                    const cachedApps = await getRepoAppsFromIndexedDB(repo.id);
+                    loaded.push({
+                        ...repo,
+                        apps: cachedApps || []
+                    });
+                }
+                setRepositories(loaded);
+            } catch (err) {
+                console.error("Error loading cached apps", err);
+            } finally {
+                setIsInitialized(true);
+            }
+        };
+        loadCachedApps();
+    }, []);
+
+    // Persist Repositories whenever they change (strip apps dynamically inside saveReposToStorage)
     useEffect(() => {
         saveReposToStorage(repositories);
     }, [repositories]);
@@ -37,11 +67,15 @@ export const useRepoManager = () => {
 
                 setSyncStatus(`Syncing ${repo.name}...`);
                 try {
-                    const apps = await fetchAppsFromUrl(repo.url);
+                    const apps = await fetchAppsFromUrl(repo.url, force);
+                    // Persist apps in IndexedDB asynchronously
+                    await saveRepoAppsToIndexedDB(repo.id, apps);
                     updatedRepos.push({ ...repo, apps, lastSynced: now });
                 } catch (e) {
                     console.warn(`Failed to sync repo ${repo.name}:`, e);
-                    updatedRepos.push({ ...repo, lastSynced: now }); 
+                    // Try to preserve cached apps if fetch fails
+                    const preservedApps = repo.apps.length > 0 ? repo.apps : await getRepoAppsFromIndexedDB(repo.id);
+                    updatedRepos.push({ ...repo, apps: preservedApps, lastSynced: now }); 
                 }
             }
             
@@ -57,9 +91,12 @@ export const useRepoManager = () => {
         setIsSyncingGlobal(true);
         setSyncStatus(`Adding ${name}...`);
         try {
-            const apps = await fetchAppsFromUrl(url);
+            const apps = await fetchAppsFromUrl(url, true);
+            const repoId = `custom-${Date.now()}`;
+            // Persist apps in IndexedDB asynchronously
+            await saveRepoAppsToIndexedDB(repoId, apps);
             const newRepo: Repo = {
-                id: `custom-${Date.now()}`,
+                id: repoId,
                 name: name,
                 url: url,
                 apps: apps,
@@ -79,10 +116,13 @@ export const useRepoManager = () => {
 
     const handleRemoveRepo = (id: string) => {
         setRepositories(prev => prev.filter(r => r.id !== id));
+        deleteRepoAppsFromIndexedDB(id).catch(err => console.error("Failed to delete apps from IndexedDB", err));
     };
 
-    // Auto-sync on mount
+    // Auto-sync on mount after IndexedDB lookup completes
     useEffect(() => {
+        if (!isInitialized) return;
+
         const needsSync = repositories.some(r => {
             if (!r.url) return false;
             return !r.lastSynced || (Date.now() - r.lastSynced > CACHE_VALIDITY_MS);
@@ -91,7 +131,7 @@ export const useRepoManager = () => {
         if (needsSync) {
             handleSyncRepos(false);
         }
-    }, []);
+    }, [isInitialized]);
 
     return {
         repositories,

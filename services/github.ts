@@ -38,45 +38,96 @@ interface GitHubContentItem {
     type: 'file' | 'dir';
 }
 
+const apiCache = new Map<string, any>();
+let lastActivePat = typeof window !== 'undefined' ? (localStorage.getItem('app-converter-github-pat') || '') : '';
+
+const isRateLimited = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    return sessionStorage.getItem('github-rate-limit-exceeded') === 'true';
+};
+
+const getGitHubHeaders = (): HeadersInit => {
+    const headers: Record<string, string> = {
+        'Accept': 'application/vnd.github.v3+json',
+    };
+    if (typeof window !== 'undefined') {
+        const pat = localStorage.getItem('app-converter-github-pat');
+        if (pat && pat.trim()) {
+            const token = pat.trim();
+            headers['Authorization'] = token.startsWith('token ') || token.startsWith('Bearer ') ? token : `token ${token}`;
+        }
+    }
+    return headers;
+};
+
+const cachedFetch = async (url: string, bypassCache: boolean = false): Promise<any> => {
+    if (isRateLimited()) {
+        throw new Error("GitHub API rate limit exceeded. Provide a GitHub PAT in Settings to lift this limit.");
+    }
+
+    if (typeof window !== 'undefined') {
+        const currentPat = localStorage.getItem('app-converter-github-pat') || '';
+        if (currentPat !== lastActivePat) {
+            apiCache.clear();
+            lastActivePat = currentPat;
+        }
+    }
+
+    if (!bypassCache && apiCache.has(url)) {
+        return apiCache.get(url);
+    }
+
+    try {
+        const response = await fetch(url, {
+            headers: getGitHubHeaders()
+        });
+
+        if (!response.ok) {
+            if (response.status === 403) {
+                if (typeof window !== 'undefined') {
+                    sessionStorage.setItem('github-rate-limit-exceeded', 'true');
+                }
+                throw new Error("GitHub API rate limit exceeded. Provide a GitHub PAT in Settings to lift this limit.");
+            }
+            throw new Error(`GitHub API error: ${response.statusText} (${response.status})`);
+        }
+
+        const data = await response.json();
+        apiCache.set(url, data);
+        return data;
+    } catch (error) {
+        throw error;
+    }
+};
+
 /**
  * Fetches the contents of a path in a GitHub repository.
  */
-export const fetchRepoContents = async (owner: string, repo: string, path: string = ''): Promise<GitHubContentItem[]> => {
+export const fetchRepoContents = async (owner: string, repo: string, path: string = '', bypassCache: boolean = false): Promise<GitHubContentItem[]> => {
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-    const response = await fetch(apiUrl);
-
-    if (!response.ok) {
-        if (response.status === 403) {
-            throw new Error("GitHub API rate limit exceeded. Please try again later or use a different repository.");
-        }
-        throw new Error(`Failed to fetch GitHub contents: ${response.statusText}`);
-    }
-
-    return response.json();
+    return cachedFetch(apiUrl, bypassCache);
 };
 
 /**
  * Fetches the entire repository tree recursively in one call.
  * This is much more efficient than navigating directory by directory.
  */
-export const fetchRecursiveRepoTree = async (owner: string, repo: string, branch: string = 'master'): Promise<{ path: string; type: string }[]> => {
+export const fetchRecursiveRepoTree = async (owner: string, repo: string, branch: string = 'master', bypassCache: boolean = false): Promise<{ path: string; type: string }[]> => {
     // Note: Recursive tree might fail for very large repos, but works for most appstores.
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
-    const response = await fetch(apiUrl);
-
-    if (!response.ok) {
-        if (response.status === 403) {
-            throw new Error("GitHub API rate limit exceeded. Please try again later.");
+    try {
+        const data = await cachedFetch(apiUrl, bypassCache);
+        return data.tree || [];
+    } catch (e: any) {
+        if (e.message && e.message.includes('rate limit')) {
+            throw e;
         }
         // Fallback to non-recursive if branch name is different (e.g. main vs master)
-        if (response.status === 404 && branch === 'master') {
-            return fetchRecursiveRepoTree(owner, repo, 'main');
+        if (branch === 'master') {
+            return fetchRecursiveRepoTree(owner, repo, 'main', bypassCache);
         }
-        throw new Error(`Failed to fetch GitHub tree: ${response.statusText}`);
+        throw e;
     }
-
-    const data = await response.json();
-    return data.tree || [];
 };
 
 /**

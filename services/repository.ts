@@ -4,11 +4,11 @@ import { parseUmbrelApp, parseCombinedMetadata } from './appParser';
 
 const CONCURRENT_LIMIT = 8;
 
-export const fetchAppsFromUrl = async (url: string): Promise<AppDefinition[]> => {
+export const fetchAppsFromUrl = async (url: string, bypassCache: boolean = false): Promise<AppDefinition[]> => {
     const gitInfo = parseGitHubUrl(url);
 
     if (gitInfo) {
-        return fetchGitHubApps(gitInfo.owner, gitInfo.repo, gitInfo.branch);
+        return fetchGitHubApps(gitInfo.owner, gitInfo.repo, gitInfo.branch, bypassCache);
     }
 
     try {
@@ -26,9 +26,9 @@ export const fetchAppsFromUrl = async (url: string): Promise<AppDefinition[]> =>
     }
 };
 
-const fetchGitHubApps = async (owner: string, repo: string, branch: string = 'master'): Promise<AppDefinition[]> => {
+const fetchGitHubApps = async (owner: string, repo: string, branch: string = 'master', bypassCache: boolean = false): Promise<AppDefinition[]> => {
     try {
-        const tree = await fetchRecursiveRepoTree(owner, repo, branch);
+        const tree = await fetchRecursiveRepoTree(owner, repo, branch, bypassCache);
         
         const folders: Record<string, { 
             compose?: string; 

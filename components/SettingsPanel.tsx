@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Repo } from '../types';
-import { X, Plus, RefreshCw, Trash2, Github, Globe, Loader2 } from 'lucide-react';
+import { X, Plus, RefreshCw, Trash2, Github, Globe, Loader2, Eye, EyeOff, AlertCircle, Check } from 'lucide-react';
 
 interface SettingsPanelProps {
   isOpen: boolean;
@@ -26,6 +26,47 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [newRepoName, setNewRepoName] = useState('');
   const [newRepoUrl, setNewRepoUrl] = useState('');
   const [isLocalFetching, setIsLocalFetching] = useState(false);
+  
+  const [githubPat, setGithubPat] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('app-converter-github-pat') || '';
+    }
+    return '';
+  });
+  const [isPatSaved, setIsPatSaved] = useState(false);
+  const [showPat, setShowPat] = useState(false);
+
+  const [isRateLimitActive, setIsRateLimitActive] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('github-rate-limit-exceeded') === 'true';
+    }
+    return false;
+  });
+
+  // Keep rate limit active updated when panel opens/focuses
+  useEffect(() => {
+    if (isOpen) {
+      setIsRateLimitActive(sessionStorage.getItem('github-rate-limit-exceeded') === 'true');
+    }
+  }, [isOpen]);
+
+  const handleSavePat = () => {
+    const trimmed = githubPat.trim();
+    if (trimmed) {
+      localStorage.setItem('app-converter-github-pat', trimmed);
+    } else {
+      localStorage.removeItem('app-converter-github-pat');
+    }
+    
+    // Clear rate limit flags so they can try again
+    sessionStorage.removeItem('github-rate-limit-exceeded');
+    setIsRateLimitActive(false);
+
+    setIsPatSaved(true);
+    setTimeout(() => {
+      setIsPatSaved(false);
+    }, 2500);
+  };
 
   const isSyncing = isSyncingExternal || isLocalFetching;
 
@@ -96,6 +137,71 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
           {/* Content */}
           <div className="flex-grow overflow-y-auto p-6 space-y-6">
+
+            {/* Rate limit warning banner */}
+            {isRateLimitActive && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-200 flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-bold text-red-400">GitHub Rate Limit Exceeded</h4>
+                  <p className="text-xs text-red-300/85 mt-1 leading-relaxed">
+                    Your current IP address has hit GitHub's unauthenticated limit of 60 requests/hour. Set a GitHub Personal Access Token (PAT) below to increase your quota to 5,000 requests/hour.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* GitHub PAT config card */}
+            <div className="bg-slate-800/50 rounded-xl p-5 border border-slate-700/50">
+                <h3 className="text-sm font-bold text-white uppercase mb-3 flex items-center gap-2">
+                    <Github className="w-4 h-4 text-orange-500" /> GitHub Token (PAT)
+                </h3>
+                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                    Providing a Personal Access Token increases the GitHub API limit from 60 to 5,000 requests per hour. No special scopes are required for reading public repositories.
+                </p>
+                <div className="space-y-3">
+                    <div className="relative">
+                        <input 
+                            type={showPat ? "text" : "password"} 
+                            placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                            value={githubPat}
+                            onChange={(e) => setGithubPat(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 text-white pl-4 pr-10 py-2 rounded-lg text-sm focus:border-orange-500 focus:outline-none placeholder-slate-600 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPat(!showPat)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 select-none cursor-pointer"
+                        >
+                          {showPat ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                    </div>
+                    
+                    <div className="flex items-center justify-between gap-4">
+                        <div className="text-[11px] text-slate-500">
+                            {githubPat ? (
+                                <span className="text-green-500 font-medium flex items-center gap-1">
+                                    <Check className="w-3.5 h-3.5" /> Token Configured
+                                </span>
+                            ) : (
+                                <span>No token set (Using Public API)</span>
+                            )}
+                        </div>
+                        <button 
+                            onClick={handleSavePat}
+                            className="bg-orange-600 hover:bg-orange-500 text-white px-5 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1"
+                        >
+                            {isPatSaved ? (
+                                <>
+                                    <Check className="w-3.5 h-3.5 animate-bounce" /> Saved!
+                                </>
+                            ) : (
+                                'Save Token'
+                            )}
+                        </button>
+                    </div>
+                </div>
+            </div>
             
             {/* Add New Section */}
             <div className="bg-slate-800/50 rounded-xl p-5 border border-slate-700/50">
